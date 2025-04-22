@@ -1,5 +1,5 @@
 import os
-from tqdm import tqdm  # Прогресс-бар (установка: pip install tqdm)
+from tqdm import tqdm
 
 
 """
@@ -10,9 +10,9 @@ from tqdm import tqdm  # Прогресс-бар (установка: pip instal
 Спасибо за установку! Удачи :D
 """
 
+
 #  Вес папки
 def get_folder_size(folder_path):
-    """Возвращает размер папки в байтах (рекурсивно)."""
     total_size = 0
     for dirpath, dirnames, filenames in os.walk(folder_path):
         for filename in filenames:
@@ -28,48 +28,47 @@ def get_folder_size(folder_path):
 def find_large_folders(root_path, min_size_gb=5):
     min_size_bytes = min_size_gb * 1024 ** 3
     large_folders = []
-
-    # 1. Считаем общий размер корневой папки
-    root_size = get_folder_size(root_path)
-    root_size_gb = root_size / (1024 ** 3)
-
-    # 2. Находим все подпапки и проверяем их размер
     all_subfolders = []
+
     for dirpath, dirnames, filenames in os.walk(root_path):
         for dirname in dirnames:
             full_path = os.path.join(dirpath, dirname)
             all_subfolders.append(full_path)
 
-    # 3. Проверяем каждую подпапку
-    for folder in tqdm(all_subfolders, desc="Сканирование"):
-        try:
-            folder_size = get_folder_size(folder)
-            if folder_size >= min_size_bytes:
-                size_gb = folder_size / (1024 ** 3)
-                large_folders.append((folder, size_gb))
-        except (PermissionError, OSError) as e:
-            print(f"\nОшибка доступа к {folder}: {e}")
-            continue
+    # Создаём кастомный прогресс-бар с градиентом
+    with tqdm(total=len(all_subfolders), desc="Сканирование", ncols=100) as pbar:
+        for i, folder in enumerate(all_subfolders):
+            try:  # Работаю над этим, некоторые папки не сканируются из-за малого доступа
+                folder_size = get_folder_size(folder)
+                if folder_size >= min_size_bytes:
+                    size_gb = folder_size / (1024 ** 3)
+                    large_folders.append((folder, size_gb))
+            except (PermissionError, OSError) as e:
+                print(f"\nОшибка доступа к {folder}: {e}")
 
-    return root_size_gb, large_folders
+            # Меняем цвет каждые 5% (красный → зелёный)
+            progress_percent = (i + 1) / len(all_subfolders) * 100
+            red = int(255 * (1 - progress_percent / 100))
+            green = int(255 * (progress_percent / 100))
+            pbar.colour = f"#{red:02x}{green:02x}00"  # HEX-код цвета
+            pbar.update(1)
+
+    return large_folders
+
 
 #  Запуск
 if __name__ == "__main__":
-    root_path = input("Введите путь к папке (например, C:\\Users\\user): ").strip()
+    root_path = input("Введите путь к папке: ").strip()
     if not os.path.isdir(root_path):
         print("Ошибка: путь не существует!")
         exit(1)
 
-    min_size_gb = 5  # Можно заменить на float(input("Минимальный размер (ГБ): "))
-
-    print(f"\nПоиск папок > {min_size_gb} ГБ в {root_path}...")
-    total_size, large_folders = find_large_folders(root_path, min_size_gb)
-
-    print(f"\nОбщий размер папки {root_path}: {total_size:.2f} ГБ")
+    print(f"\nПоиск папок > 5 ГБ в {root_path}...")
+    large_folders = find_large_folders(root_path)
 
     if large_folders:
-        print("\nБольшие вложенные папки:")
-        for folder, size in sorted(large_folders, key=lambda x: -x[1]):  # Сортировка по убыванию
+        print("\nРезультаты:")
+        for folder, size in sorted(large_folders, key=lambda x: -x[1]):
             print(f"{folder} - {size:.2f} ГБ")
     else:
-        print("\nБольших вложенных папок не найдено.")
+        print("\nБольших папок не найдено.")
