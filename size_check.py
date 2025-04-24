@@ -6,6 +6,15 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 
+"""
+Программа помогает очистить место с компа
+Иногда где-то глубоко в папках хранятся больше файлы о которых мы даже не знаем
+Это первая итерация программы, а значит будут баги и в будущем я буду её улучшать + добавлять новый функционал
+В случае, если требуется найти папку не более 5ГБ, а более 10ГБ например, то смотрим в def find_large_folders и меняем min_size_gb на нужное кол-во ГБ
+Спасибо за установку! Удачи :D
+"""
+
+
 class FolderScanner(QThread):
     progress_updated = pyqtSignal(int, int)  # current, total
     folder_found = pyqtSignal(str, float)    # path, size
