@@ -1,74 +1,185 @@
 import os
-from tqdm import tqdm
+import sys
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+                             QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
+                             QMessageBox, QListWidget, QSpinBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 
-"""
-Программа помогает очистить место с компа
-Иногда где-то глубоко в папках хранятся больше файлы о которых мы даже не знаем
-Это первая итерация программы, а значит будут баги и в будущем я буду её улучшать + добавлять новый функционал
-В случае, если требуется найти папку не более 5ГБ, а более 10ГБ например, то смотрим в def find_large_folders и меняем min_size_gb на нужное кол-во ГБ
-Спасибо за установку! Удачи :D
-"""
+class FolderScanner(QThread):
+    progress_updated = pyqtSignal(int, int)  # current, total
+    folder_found = pyqtSignal(str, float)    # path, size
+    total_size_calculated = pyqtSignal(float)
+    error_occurred = pyqtSignal(str)
 
+    def __init__(self, root_path, min_size_gb):
+        super().__init__()
+        self.root_path = root_path
+        self.min_size_gb = min_size_gb
+        self.running = True
 
-#  Вес папки
-def get_folder_size(folder_path):
-    total_size = 0
-    for dirpath, dirnames, filenames in os.walk(folder_path):
-        for filename in filenames:
-            file_path = os.path.join(dirpath, filename)
-            if os.path.exists(file_path):
+    def run(self):
+        try:
+            total_size = self.get_folder_size(self.root_path)
+            self.total_size_calculated.emit(total_size / (1024 ** 3))
+
+            all_subfolders = []
+            for dirpath, dirnames, filenames in os.walk(self.root_path):
+                if not self.running:
+                    return
+                for dirname in dirnames:
+                    full_path = os.path.join(dirpath, dirname)
+                    all_subfolders.append(full_path)
+
+            total = len(all_subfolders)
+            for i, folder in enumerate(all_subfolders):
+                if not self.running:
+                    return
                 try:
-                    total_size += os.path.getsize(file_path)
-                except (OSError, PermissionError):
-                    continue
-    return total_size
+                    folder_size = self.get_folder_size(folder)
+                    if folder_size >= self.min_size_gb * (1024 ** 3):
+                        size_gb = folder_size / (1024 ** 3)
+                        self.folder_found.emit(folder, size_gb)
+                except Exception as e:
+                    self.error_occurred.emit(str(e))
+                self.progress_updated.emit(i + 1, total)
 
-#  Вес > указанного
-def find_large_folders(root_path, min_size_gb=5):
-    min_size_bytes = min_size_gb * 1024 ** 3
-    large_folders = []
-    all_subfolders = []
+        except Exception as e:
+            self.error_occurred.emit(str(e))
 
-    for dirpath, dirnames, filenames in os.walk(root_path):
-        for dirname in dirnames:
-            full_path = os.path.join(dirpath, dirname)
-            all_subfolders.append(full_path)
+    def get_folder_size(self, folder_path):
+        total_size = 0
+        for dirpath, dirnames, filenames in os.walk(folder_path):
+            if not self.running:
+                return 0
+            for filename in filenames:
+                file_path = os.path.join(dirpath, filename)
+                if os.path.exists(file_path):
+                    try:
+                        total_size += os.path.getsize(file_path)
+                    except (OSError, PermissionError):
+                        continue
+        return total_size
 
-    # Создаём кастомный прогресс-бар с градиентом
-    with tqdm(total=len(all_subfolders), desc="Сканирование", ncols=100) as pbar:
-        for i, folder in enumerate(all_subfolders):
-            try:  # Работаю над этим, некоторые папки не сканируются из-за малого доступа
-                folder_size = get_folder_size(folder)
-                if folder_size >= min_size_bytes:
-                    size_gb = folder_size / (1024 ** 3)
-                    large_folders.append((folder, size_gb))
-            except (PermissionError, OSError) as e:
-                print(f"\nОшибка доступа к {folder}: {e}")
+    def stop(self):
+        self.running = False
 
-            # Меняем цвет каждые 5% (красный → зелёный)
-            progress_percent = (i + 1) / len(all_subfolders) * 100
-            red = int(255 * (1 - progress_percent / 100))
-            green = int(255 * (progress_percent / 100))
-            pbar.colour = f"#{red:02x}{green:02x}00"  # HEX-код цвета
-            pbar.update(1)
 
-    return large_folders
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.scanner = None
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle('Большие папки')
+        self.setGeometry(100, 100, 600, 400)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        # Path selection
+        path_layout = QHBoxLayout()
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Выберите папку для анализа")
+        path_btn = QPushButton("Обзор...")
+        path_btn.clicked.connect(self.select_folder)
+        path_layout.addWidget(self.path_edit)
+        path_layout.addWidget(path_btn)
+
+        # Settings
+        settings_layout = QHBoxLayout()
+        settings_layout.addWidget(QLabel("Минимальный размер (ГБ):"))
+        self.size_spin = QSpinBox()
+        self.size_spin.setMinimum(1)
+        self.size_spin.setValue(5)
+        settings_layout.addWidget(self.size_spin)
+        settings_layout.addStretch()
+
+        # Controls
+        self.scan_btn = QPushButton("Сканировать")
+        self.scan_btn.clicked.connect(self.start_scan)
+        self.stop_btn = QPushButton("Остановить")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self.stop_scan)
+
+        # Progress
+        self.progress = QProgressBar()
+        self.progress.setAlignment(Qt.AlignCenter)
+
+        # Results
+        self.results_list = QListWidget()
+
+        # Layout assembly
+        layout.addLayout(path_layout)
+        layout.addLayout(settings_layout)
+        layout.addWidget(self.progress)
+        layout.addWidget(self.scan_btn)
+        layout.addWidget(self.stop_btn)
+        layout.addWidget(QLabel("Результаты:"))
+        layout.addWidget(self.results_list)
+
+    def select_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if folder:
+            self.path_edit.setText(folder)
+
+    def start_scan(self):
+        if self.scanner and self.scanner.isRunning():
+            return
+
+        path = self.path_edit.text()
+        if not os.path.isdir(path):
+            QMessageBox.warning(self, "Ошибка", "Укажите корректную папку!")
+            return
+
+        self.results_list.clear()
+        self.scanner = FolderScanner(path, self.size_spin.value())
+        self.scanner.progress_updated.connect(self.update_progress)
+        self.scanner.folder_found.connect(self.add_result)
+        self.scanner.total_size_calculated.connect(self.show_total_size)
+        self.scanner.error_occurred.connect(self.show_error)
+        self.scanner.finished.connect(self.scan_finished)
+
+        self.scan_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.scanner.start()
+
+    def stop_scan(self):
+        if self.scanner and self.scanner.isRunning():
+            self.scanner.stop()
+            self.scanner.wait()
+        self.scan_finished()
+
+    def scan_finished(self):
+        self.scan_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.progress.setValue(0)
+
+    def update_progress(self, current, total):
+        self.progress.setMaximum(total)
+        self.progress.setValue(current)
+        self.progress.setFormat(f"Обработано: {current}/{total} ({current/total:.1%})")
+
+    def add_result(self, path, size):
+        self.results_list.addItem(f"{path} - {size:.2f} ГБ")
+
+    def show_total_size(self, size_gb):
+        QMessageBox.information(self, "Общий размер",
+                               f"Общий размер папки: {size_gb:.2f} ГБ")
+
+    def show_error(self, message):
+        QMessageBox.critical(self, "Ошибка", message)
+
+    def closeEvent(self, event):
+        self.stop_scan()
+        event.accept()
 
 
 #  Запуск
-if __name__ == "__main__":
-    root_path = input("Введите путь к папке: ").strip()
-    if not os.path.isdir(root_path):
-        print("Ошибка: путь не существует!")
-        exit(1)
-
-    print(f"\nПоиск папок > 5 ГБ в {root_path}...")
-    large_folders = find_large_folders(root_path)
-
-    if large_folders:
-        print("\nРезультаты:")
-        for folder, size in sorted(large_folders, key=lambda x: -x[1]):
-            print(f"{folder} - {size:.2f} ГБ")
-    else:
-        print("\nБольших папок не найдено.")
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())
