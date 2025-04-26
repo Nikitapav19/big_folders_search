@@ -2,7 +2,7 @@ import os
 import sys
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
-                             QMessageBox, QListWidget, QSpinBox)
+                             QListWidget, QSpinBox, QSizePolicy)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 
@@ -17,7 +17,7 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 class FolderScanner(QThread):
     progress_updated = pyqtSignal(int, int)  # current, total
-    folder_found = pyqtSignal(str, float)    # path, size
+    folder_found = pyqtSignal(str, float)  # path, size
     total_size_calculated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
 
@@ -26,7 +26,7 @@ class FolderScanner(QThread):
         self.root_path = root_path
         self.min_size_gb = min_size_gb
         self.running = True
-
+  # Запускаем
     def run(self):
         try:
             total_size = self.get_folder_size(self.root_path)
@@ -82,7 +82,8 @@ class MainWindow(QMainWindow):
 
     def initUI(self):
         self.setWindowTitle('Большие папки')
-        self.setGeometry(100, 100, 600, 400)
+        self.setGeometry(100, 100, 800, 600)
+        self.setMinimumSize(600, 400)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -103,8 +104,19 @@ class MainWindow(QMainWindow):
         self.size_spin = QSpinBox()
         self.size_spin.setMinimum(1)
         self.size_spin.setValue(5)
+        self.size_spin.setMinimumWidth(120)
+        self.size_spin.setMaximumWidth(150)
         settings_layout.addWidget(self.size_spin)
         settings_layout.addStretch()
+
+        # Total size
+        self.total_size_label = QLabel("Общий размер папки: -")
+        self.total_size_label.setAlignment(Qt.AlignRight)
+        self.total_size_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Progress
+        self.progress = QProgressBar()
+        self.progress.setAlignment(Qt.AlignCenter)
 
         # Controls
         self.scan_btn = QPushButton("Сканировать")
@@ -113,10 +125,6 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop_scan)
 
-        # Progress
-        self.progress = QProgressBar()
-        self.progress.setAlignment(Qt.AlignCenter)
-
         # Results
         self.results_list = QListWidget()
 
@@ -124,6 +132,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(path_layout)
         layout.addLayout(settings_layout)
         layout.addWidget(self.progress)
+        layout.addWidget(self.total_size_label)
         layout.addWidget(self.scan_btn)
         layout.addWidget(self.stop_btn)
         layout.addWidget(QLabel("Результаты:"))
@@ -140,10 +149,11 @@ class MainWindow(QMainWindow):
 
         path = self.path_edit.text()
         if not os.path.isdir(path):
-            QMessageBox.warning(self, "Ошибка", "Укажите корректную папку!")
+            self.show_error("Укажите корректную папку!")
             return
 
         self.results_list.clear()
+        self.total_size_label.setText("Общий размер папки: вычисляется...")
         self.scanner = FolderScanner(path, self.size_spin.value())
         self.scanner.progress_updated.connect(self.update_progress)
         self.scanner.folder_found.connect(self.add_result)
@@ -175,16 +185,14 @@ class MainWindow(QMainWindow):
         self.results_list.addItem(f"{path} - {size:.2f} ГБ")
 
     def show_total_size(self, size_gb):
-        QMessageBox.information(self, "Общий размер",
-                               f"Общий размер папки: {size_gb:.2f} ГБ")
+        self.total_size_label.setText(f"Общий размер папки: {size_gb:.2f} ГБ")
 
     def show_error(self, message):
-        QMessageBox.critical(self, "Ошибка", message)
+        self.results_list.addItem(f"ОШИБКА: {message}")
 
     def closeEvent(self, event):
         self.stop_scan()
         event.accept()
-
 
 #  Запуск
 if __name__ == '__main__':
