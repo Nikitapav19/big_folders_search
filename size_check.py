@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
                              QListWidget, QSpinBox, QSizePolicy)
@@ -16,8 +17,8 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 
 
 class FolderScanner(QThread):
-    progress_updated = pyqtSignal(int, int)  # current, total
-    folder_found = pyqtSignal(str, float)  # path, size
+    progress_updated = pyqtSignal(int, int)
+    folder_found = pyqtSignal(str, float)
     total_size_calculated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
 
@@ -26,7 +27,7 @@ class FolderScanner(QThread):
         self.root_path = root_path
         self.min_size_gb = min_size_gb
         self.running = True
-  # Запускаем
+    #  Запускаем
     def run(self):
         try:
             total_size = self.get_folder_size(self.root_path)
@@ -127,6 +128,7 @@ class MainWindow(QMainWindow):
 
         # Results
         self.results_list = QListWidget()
+        self.results_list.itemDoubleClicked.connect(self.open_folder)  # Обработчик двойного клика
 
         # Layout assembly
         layout.addLayout(path_layout)
@@ -190,11 +192,28 @@ class MainWindow(QMainWindow):
     def show_error(self, message):
         self.results_list.addItem(f"ОШИБКА: {message}")
 
+    def open_folder(self, item):
+        """Открывает папку в проводнике при двойном клике"""
+        path = item.text().split(" - ")[0]  # Извлекаем путь из строки
+        if os.path.exists(path):
+            try:
+                # Кроссплатформенное открытие папки
+                if sys.platform == 'win32':
+                    os.startfile(path)
+                elif sys.platform == 'darwin':
+                    subprocess.run(['open', path])
+                else:
+                    subprocess.run(['xdg-open', path])
+            except Exception as e:
+                self.show_error(f"Не удалось открыть папку: {str(e)}")
+        else:
+            self.show_error(f"Папка не найдена: {path}")
+
     def closeEvent(self, event):
         self.stop_scan()
         event.accept()
 
-#  Запуск
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
