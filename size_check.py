@@ -17,17 +17,16 @@ from PyQt5.QtGui import QColor, QBrush
 
 class FolderScanner(QThread):
     progress_updated = pyqtSignal(int, int)
-    folder_found = pyqtSignal(str, float, bool)  # path, size, is_parent
+    folder_found = pyqtSignal(str, float, bool)  # path, size, is_top_level
     total_size_calculated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
 
     def __init__(self, root_path, min_size_gb, skip_hidden=False):
         super().__init__()
-        self.root_path = root_path
+        self.root_path = os.path.normpath(root_path)
         self.min_size_gb = min_size_gb
         self.skip_hidden = skip_hidden
         self.running = True
-        self.folder_cache = {}
 
     def run(self):
         try:
@@ -35,56 +34,34 @@ class FolderScanner(QThread):
             total_size = self.fast_get_folder_size(self.root_path)
             self.total_size_calculated.emit(total_size / (1024 ** 3))
 
-            # Сканирование с оптимизацией
-            self.scan_folders(self.root_path)
+            # Определяем папки первого уровня
+            top_level_folders = set()
+            with os.scandir(self.root_path) as it:
+                for entry in it:
+                    if entry.is_dir() and not (self.skip_hidden and entry.name.startswith('.')):
+                        top_level_folders.add(os.path.normpath(entry.path))
+
+            # Сканирование с определением уровня вложенности
+            for dirpath, dirnames, filenames in os.walk(self.root_path):
+                if not self.running:
+                    return
+
+                # Проверяем, является ли текущая папка папкой первого уровня
+                is_top_level = os.path.normpath(dirpath) in top_level_folders
+
+                try:
+                    folder_size = self.fast_get_folder_size(dirpath)
+                    if folder_size >= self.min_size_gb * (1024 ** 3):
+                        size_gb = folder_size / (1024 ** 3)
+                        self.folder_found.emit(dirpath, size_gb, is_top_level)
+                except Exception as e:
+                    self.error_occurred.emit(str(e))
 
         except Exception as e:
             self.error_occurred.emit(str(e))
 
-    def scan_folders(self, start_path):
-        folder_stack = [(start_path, False)]  # (path, is_processed)
-        min_size_bytes = self.min_size_gb * (1024 ** 3)
-        total_folders = sum(len(dirs) for _, dirs, _ in os.walk(start_path))
-        processed = 0
-
-        while folder_stack and self.running:
-            current_path, is_processed = folder_stack.pop()
-
-            if is_processed:
-                # После обработки всех подпапок вычисляем размер текущей папки
-                try:
-                    folder_size = self.fast_get_folder_size(current_path)
-                    if folder_size >= min_size_bytes:
-                        is_parent = any(p.startswith(current_path) for p, _ in self.folder_cache.items())
-                        self.folder_cache[current_path] = folder_size
-                        size_gb = folder_size / (1024 ** 3)
-                        self.folder_found.emit(current_path, size_gb, is_parent)
-                except Exception as e:
-                    self.error_occurred.emit(str(e))
-
-                processed += 1
-                self.progress_updated.emit(processed, total_folders)
-                continue
-
-            # Добавляем текущую папку обратно в стек как обработанную
-            folder_stack.append((current_path, True))
-
-            # Добавляем подпапки в стек
-            try:
-                with os.scandir(current_path) as it:
-                    for entry in it:
-                        if not self.running:
-                            return
-                        if entry.is_dir() and not (self.skip_hidden and entry.name.startswith('.')):
-                            folder_stack.append((entry.path, False))
-            except Exception as e:
-                self.error_occurred.emit(str(e))
-
     def fast_get_folder_size(self, path):
-        """Быстрое вычисление размера папки с использованием кэша"""
-        if path in self.folder_cache:
-            return self.folder_cache[path]
-
+        """Быстрое вычисление размера папки"""
         total_size = 0
         try:
             with os.scandir(path) as it:
@@ -100,7 +77,6 @@ class FolderScanner(QThread):
                         continue
         except:
             return 0
-
         return total_size
 
     def stop(self):
@@ -171,6 +147,9 @@ class MainWindow(QMainWindow):
                 font-family: Consolas, monospace;
                 font-size: 11px;
             }
+            QListWidget::item {
+                padding: 2px;
+            }
         """)
 
         # Layout assembly
@@ -230,12 +209,13 @@ class MainWindow(QMainWindow):
         self.progress.setValue(current)
         self.progress.setFormat(f"Обработано: {current}/{total} ({current / total:.1%})")
 
-    def add_result(self, path, size, is_parent):
+    def add_result(self, path, size, is_top_level):
         item = QListWidgetItem(f"{path} - {size:.2f} ГБ")
 
-        # Подсветка родительских папок серым цветом
-        if is_parent:
-            item.setForeground(QBrush(QColor(100, 100, 100)))
+        # Подсветка: черный для папок первого уровня, серый для вложенных
+        if not is_top_level:
+            item.setForeground(QBrush(QColor(120, 120, 120)))  # Серый
+        # Черный цвет используется по умолчанию
 
         self.results_list.addItem(item)
 
