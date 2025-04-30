@@ -20,6 +20,7 @@ class FolderScanner(QThread):
     folder_found = pyqtSignal(str, float, bool)  # path, size, is_top_level
     total_size_calculated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
+    scan_complete = pyqtSignal()
 
     def __init__(self, root_path, min_size_gb, skip_hidden=False):
         super().__init__()
@@ -27,9 +28,14 @@ class FolderScanner(QThread):
         self.min_size_gb = min_size_gb
         self.skip_hidden = skip_hidden
         self.running = True
+        self.total_folders = 0
+        self.processed_folders = 0
 
     def run(self):
         try:
+            # Сначала подсчитываем общее количество папок для прогресс-бара
+            self.count_folders(self.root_path)
+
             # Быстрый расчет общего размера
             total_size = self.fast_get_folder_size(self.root_path)
             self.total_size_calculated.emit(total_size / (1024 ** 3))
@@ -57,8 +63,21 @@ class FolderScanner(QThread):
                 except Exception as e:
                     self.error_occurred.emit(str(e))
 
+                self.processed_folders += 1
+                self.progress_updated.emit(self.processed_folders, self.total_folders)
+
+            self.scan_complete.emit()
+
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+    def count_folders(self, start_path):
+        """Подсчет общего количества папок для прогресс-бара"""
+        self.total_folders = 0
+        for root, dirs, files in os.walk(start_path):
+            if not self.running:
+                return
+            self.total_folders += len(dirs)
 
     def fast_get_folder_size(self, path):
         """Быстрое вычисление размера папки"""
@@ -131,6 +150,7 @@ class MainWindow(QMainWindow):
         # Progress
         self.progress = QProgressBar()
         self.progress.setAlignment(Qt.AlignCenter)
+        self.progress.setValue(0)
 
         # Controls
         self.scan_btn = QPushButton("Сканировать")
@@ -177,6 +197,7 @@ class MainWindow(QMainWindow):
             return
 
         self.results_list.clear()
+        self.progress.setValue(0)
         self.total_size_label.setText("Общий размер папки: вычисляется...")
         self.scanner = FolderScanner(
             path,
@@ -187,6 +208,7 @@ class MainWindow(QMainWindow):
         self.scanner.folder_found.connect(self.add_result)
         self.scanner.total_size_calculated.connect(self.show_total_size)
         self.scanner.error_occurred.connect(self.show_error)
+        self.scanner.scan_complete.connect(self.scan_finished)
         self.scanner.finished.connect(self.scan_finished)
 
         self.scan_btn.setEnabled(False)
@@ -202,12 +224,11 @@ class MainWindow(QMainWindow):
     def scan_finished(self):
         self.scan_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.progress.setValue(0)
 
     def update_progress(self, current, total):
         self.progress.setMaximum(total)
         self.progress.setValue(current)
-        self.progress.setFormat(f"Обработано: {current}/{total} ({current / total:.1%})")
+        self.progress.setFormat(f"Обработано: {current}/{total} ({current / total:.0%})")
 
     def add_result(self, path, size, is_top_level):
         item = QListWidgetItem(f"{path} - {size:.2f} ГБ")
