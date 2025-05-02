@@ -17,11 +17,11 @@ from PyQt5.QtGui import QColor, QBrush
 
 
 class FolderScanner(QThread):
-    progress_updated = pyqtSignal(int, int)
+    progress_updated = pyqtSignal(int, int)  # current, total
     folder_found = pyqtSignal(str, float, bool)  # path, size, is_top_level
     total_size_calculated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
-    scan_complete = pyqtSignal(list)  # Передаем список всех найденных папок
+    scan_complete = pyqtSignal()
 
     def __init__(self, root_path, min_size_gb, skip_hidden=False):
         super().__init__()
@@ -29,10 +29,15 @@ class FolderScanner(QThread):
         self.min_size_gb = min_size_gb
         self.skip_hidden = skip_hidden
         self.running = True
-        self.found_folders = []  # Храним все найденные папки
+        self.total_folders = 0
+        self.processed_folders = 0
+
 
     def run(self):
         try:
+            # Подсчет общего количества папок для прогресс-бара
+            self.count_folders(self.root_path)
+
             # Быстрый расчет общего размера
             total_size = self.fast_get_folder_size(self.root_path)
             self.total_size_calculated.emit(total_size / (1024 ** 3))
@@ -44,28 +49,41 @@ class FolderScanner(QThread):
                     if entry.is_dir() and not (self.skip_hidden and entry.name.startswith('.')):
                         top_level_folders.add(os.path.normpath(entry.path))
 
-            # Собираем все папки
+            # Основное сканирование
             for dirpath, dirnames, filenames in os.walk(self.root_path):
                 if not self.running:
                     return
 
+                # Проверяем уровень вложенности
                 is_top_level = os.path.normpath(dirpath) in top_level_folders
 
                 try:
                     folder_size = self.fast_get_folder_size(dirpath)
                     if folder_size >= self.min_size_gb * (1024 ** 3):
                         size_gb = folder_size / (1024 ** 3)
-                        self.found_folders.append((dirpath, size_gb, is_top_level))
                         self.folder_found.emit(dirpath, size_gb, is_top_level)
                 except Exception as e:
                     self.error_occurred.emit(str(e))
 
-            self.scan_complete.emit(self.found_folders)
+                # Обновляем прогресс
+                self.processed_folders += 1
+                self.progress_updated.emit(self.processed_folders, self.total_folders)
+
+            self.scan_complete.emit()
 
         except Exception as e:
             self.error_occurred.emit(str(e))
 
+    def count_folders(self, start_path):
+        """Рекурсивно подсчитываем общее количество папок"""
+        self.total_folders = 0
+        for root, dirs, files in os.walk(start_path):
+            if not self.running:
+                return
+            self.total_folders += len(dirs)
+
     def fast_get_folder_size(self, path):
+        """Быстрое вычисление размера папки"""
         total_size = 0
         try:
             with os.scandir(path) as it:
@@ -137,6 +155,7 @@ class MainWindow(QMainWindow):
         self.progress = QProgressBar()
         self.progress.setAlignment(Qt.AlignCenter)
         self.progress.setValue(0)
+        self.progress.setFormat("%p%")  # Процент выполнения
 
         # Filter controls
         filter_layout = QHBoxLayout()
@@ -208,7 +227,7 @@ class MainWindow(QMainWindow):
             self.skip_hidden_check.isChecked()
         )
         self.scanner.progress_updated.connect(self.update_progress)
-        self.scanner.folder_found.connect(self.add_result)
+        self.scanner.folder_found.connect(self.add_folder_data)
         self.scanner.total_size_calculated.connect(self.show_total_size)
         self.scanner.error_occurred.connect(self.show_error)
         self.scanner.scan_complete.connect(self.on_scan_complete)
@@ -228,33 +247,32 @@ class MainWindow(QMainWindow):
         self.scan_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
-    def on_scan_complete(self, folders):
-        self.all_folders = folders
+    def on_scan_complete(self):
         self.filter_combo.setEnabled(True)
         self.apply_filter(0)  # Показываем оригинальный порядок
 
     def update_progress(self, current, total):
         self.progress.setMaximum(total)
         self.progress.setValue(current)
-        self.progress.setFormat(f"Обработано: {current}/{total} ({current / total:.0%})")
+        percent = int((current / total) * 100) if total > 0 else 0
+        self.progress.setFormat(f"{current}/{total} папок ({percent}%)")
 
-    def add_result(self, path, size, is_top_level):
+    def add_folder_data(self, path, size, is_top_level):
+        self.all_folders.append((path, size, is_top_level))
+
         item = QListWidgetItem(f"{path} - {size:.2f} ГБ")
         if not is_top_level:
             item.setForeground(QBrush(QColor(120, 120, 120)))
         self.results_list.addItem(item)
 
     def apply_filter(self, index):
-        if not self.all_folders:
-            return
-
         self.results_list.clear()
 
         # Фильтруем только родительские папки
         parent_folders = [f for f in self.all_folders if f[2]]  # is_top_level=True
         child_folders = [f for f in self.all_folders if not f[2]]  # is_top_level=False
 
-        # Сортируем родительские папки согласно выбранному фильтру
+        # Сортируем родительские папки
         if index == 1:  # По размеру (убыв.)
             parent_folders.sort(key=lambda x: -x[1])
         elif index == 2:  # По размеру (возр.)
@@ -263,15 +281,14 @@ class MainWindow(QMainWindow):
             parent_folders.sort(key=lambda x: x[0].lower())
 
         # Восстанавливаем иерархию
-        for parent in parent_folders:
-            # Добавляем родительскую папку
-            item = QListWidgetItem(f"{parent[0]} - {parent[1]:.2f} ГБ")
+        for path, size, _ in parent_folders:
+            item = QListWidgetItem(f"{path} - {size:.2f} ГБ")
             self.results_list.addItem(item)
 
             # Добавляем дочерние папки
-            for child in child_folders:
-                if child[0].startswith(parent[0] + os.sep):
-                    child_item = QListWidgetItem(f"  {child[0]} - {child[1]:.2f} ГБ")
+            for child_path, child_size, _ in child_folders:
+                if child_path.startswith(path + os.sep):
+                    child_item = QListWidgetItem(f"  {child_path} - {child_size:.2f} ГБ")
                     child_item.setForeground(QBrush(QColor(120, 120, 120)))
                     self.results_list.addItem(child_item)
 
