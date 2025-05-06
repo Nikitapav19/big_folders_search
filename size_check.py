@@ -435,6 +435,10 @@ class MainWindow(QMainWindow):
 
     def open_folder(self, item):
         """Открытие папки в проводнике"""
+        text = item.text().strip()
+        if text.startswith("❌ Ошибка:"):
+            return
+
         path = item.text().split(" - ")[0].strip()
         if '├─' in path:  # Фиксит открытие подпапок
             path = path.split('├─')[1].strip()
