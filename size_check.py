@@ -4,7 +4,7 @@ import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
                              QListWidget, QSpinBox, QCheckBox, QListWidgetItem,
-                             QComboBox)
+                             QComboBox, QDoubleSpinBox)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QFont
 
@@ -161,12 +161,15 @@ class MainWindow(QMainWindow):
         settings_layout = QHBoxLayout()
 
         # Минимальный размер
+        size_layout = QHBoxLayout()
         size_label = QLabel("📏 Минимальный размер:")
         self.size_spin = QSpinBox()
         self.size_spin.setRange(1, 1000)
-        self.size_spin.setValue(5)
-        self.size_spin.setSuffix(" ГБ")
-        self.size_spin.setStyleSheet("padding: 5px;")
+        self.size_spin.setValue(1)
+        self.size_spin.setStyleSheet("padding: 5px; width: 80px;")
+        size_unit = QLabel("ГБ")
+
+        size_layout.addWidget(size_unit)
 
         # Пропуск скрытых папок
         self.skip_hidden_check = QCheckBox("👻 Пропускать скрытые папки")
@@ -174,6 +177,7 @@ class MainWindow(QMainWindow):
 
         settings_layout.addWidget(size_label)
         settings_layout.addWidget(self.size_spin)
+        settings_layout.addLayout(size_layout)
         settings_layout.addStretch()
         settings_layout.addWidget(self.skip_hidden_check)
 
@@ -306,9 +310,17 @@ class MainWindow(QMainWindow):
         if self.scanner and self.scanner.isRunning():
             return  # сканирование уже идет
 
-        path = self.path_edit.text()
+        # Получаем и очищаем путь
+        path = self.path_edit.text().strip()
+
+        # Проверка на пустой путь
+        if not path:
+            self.show_error("Поле пути не может быть пустым!")
+            return
+
+        # Проверка существования папки
         if not os.path.isdir(path):
-            self.show_error("❌ Ошибка", "Укажите корректную папку для сканирования!")
+            self.show_error("Указанная папка не существует!")
             return
 
         # Подготовка интерфейса перед сканированием
