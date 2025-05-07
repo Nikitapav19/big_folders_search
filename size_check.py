@@ -4,8 +4,8 @@ import sys
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
-                             QListWidget, QSpinBox, QCheckBox, QListWidgetItem,
-                             QComboBox, QDoubleSpinBox, QMessageBox, QMenu)
+                             QListWidget, QSpinBox, QListWidgetItem,
+                             QComboBox  , QMessageBox, QMenu)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QFont
 
@@ -354,11 +354,24 @@ class MainWindow(QMainWindow):
                 # Удаляем папку с содержимым
                 shutil.rmtree(path)
 
-                # Удаляем элемент из списка
-                self.results_list.takeItem(self.results_list.row(item))
+                # Получаем полный путь удаляемой папки
+                deleted_path = os.path.normpath(path)
+
+                # Удаляем все связанные элементы из списка
+                for i in range(self.results_list.count() - 1, -1, -1):
+                    current_item = self.results_list.item(i)
+                    current_path = self.get_path_from_item(current_item)
+
+                    # Удаляем если это сама папка или ее подпапка
+                    if (current_path == deleted_path or
+                            current_path.startswith(deleted_path + os.sep)):
+                        self.results_list.takeItem(i)
 
                 # Обновляем общий список папок
-                self.all_folders = [f for f in self.all_folders if f[0] != path]
+                self.all_folders = [
+                    f for f in self.all_folders
+                    if not (f[0] == deleted_path or f[0].startswith(deleted_path + os.sep))
+                ]
 
                 QMessageBox.information(self, "Успех", "Папка успешно удалена!")
             except Exception as e:
