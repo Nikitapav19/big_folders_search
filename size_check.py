@@ -1,10 +1,11 @@
 import os
+import shutil
 import sys
 import subprocess
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QLineEdit, QPushButton, QProgressBar, QFileDialog,
                              QListWidget, QSpinBox, QCheckBox, QListWidgetItem,
-                             QComboBox, QDoubleSpinBox)
+                             QComboBox, QDoubleSpinBox, QMessageBox, QMenu)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QColor, QBrush, QFont
 
@@ -27,11 +28,10 @@ class FolderScanner(QThread):
     error_occurred = pyqtSignal(str)  # ошибки при сканировании
     scan_complete = pyqtSignal()  # сигнал завершения сканирования
 
-    def __init__(self, root_path, min_size_gb, skip_hidden=False):
+    def __init__(self, root_path, min_size_gb):
         super().__init__()
         self.root_path = os.path.normpath(root_path)
         self.min_size_gb = min_size_gb
-        self.skip_hidden = skip_hidden
         self.running = True  # флаг для остановки сканирования
         self.total_folders = 0  # общее количество папок
         self.processed_folders = 0  # обработанные папки
@@ -50,7 +50,7 @@ class FolderScanner(QThread):
             top_level_folders = set()
             with os.scandir(self.root_path) as it:
                 for entry in it:
-                    if entry.is_dir() and not (self.skip_hidden and entry.name.startswith('.')):
+                    if entry.is_dir():
                         top_level_folders.add(os.path.normpath(entry.path))
 
             # Основной цикл сканирования
@@ -124,6 +124,9 @@ class MainWindow(QMainWindow):
         self.all_folders = []  # список всех найденных папок
         self.initUI()  # инициализация интерфейса
 
+        self.results_list.setContextMenuPolicy(Qt.CustomContextMenu)  # контекстное меню
+        self.results_list.customContextMenuRequested.connect(self.show_context_menu)
+
     def initUI(self):
         """Инициализация пользовательского интерфейса"""
         # Настройки главного окна
@@ -150,7 +153,7 @@ class MainWindow(QMainWindow):
         self.path_edit.setStyleSheet("padding: 5px;")
 
         path_btn = QPushButton("🌐 Обзор...")
-        path_btn.setStyleSheet("padding: 5px; background: #4CAF50; color: white;")
+        path_btn.setStyleSheet("padding: 5px; background: #008000; color: white;")
         path_btn.clicked.connect(self.select_folder)
 
         path_layout.addWidget(path_label)
@@ -162,7 +165,7 @@ class MainWindow(QMainWindow):
 
         # Минимальный размер
         size_layout = QHBoxLayout()
-        size_label = QLabel("📏 Минимальный размер:")
+        size_label = QLabel("🪶 Минимальный размер:")
         self.size_spin = QSpinBox()
         self.size_spin.setRange(1, 1000)
         self.size_spin.setValue(1)
@@ -171,15 +174,10 @@ class MainWindow(QMainWindow):
 
         size_layout.addWidget(size_unit)
 
-        # Пропуск скрытых папок
-        self.skip_hidden_check = QCheckBox("👻 Пропускать скрытые папки")
-        self.skip_hidden_check.setChecked(True)
-
         settings_layout.addWidget(size_label)
         settings_layout.addWidget(self.size_spin)
         settings_layout.addLayout(size_layout)
         settings_layout.addStretch()
-        settings_layout.addWidget(self.skip_hidden_check)
 
         # 4. Прогресс сканирования
         self.progress = QProgressBar()
@@ -253,10 +251,9 @@ class MainWindow(QMainWindow):
         filter_label = QLabel("🔧 Сортировка:")
         self.filter_combo = QComboBox()
         self.filter_combo.addItems([
-            "🌀 Оригинальный порядок",
+            "🔤 По алфавиту",
             "⬇️ По размеру (убыв.)",
-            "⬆️ По размеру (возр.)",
-            "🔤 По алфавиту"
+            "⬆️ По размеру (возр.)"
         ])
         self.filter_combo.setEnabled(False)
         self.filter_combo.setStyleSheet("padding: 5px;")
@@ -273,20 +270,28 @@ class MainWindow(QMainWindow):
         self.results_list = QListWidget()
         self.results_list.setFont(QFont("Consolas", 10))
         self.results_list.setStyleSheet("""
-            QListWidget {
-                background: #f9f9f9;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                padding: 5px;
-            }
-            QListWidget::item {
-                padding: 5px;
-                border-bottom: 1px solid #eee;
-            }
-            QListWidget::item:hover {
-                background: #e6f7ff;
-            }
-        """)
+                    QListWidget {
+                        background: #f9f9f9;
+                        border: 1px solid #ddd;
+                        border-radius: 5px;
+                        padding: 5px;
+                    }
+                    QListWidget::item {
+                        padding: 5px;
+                        border-bottom: 1px solid #eee;
+                    }
+                    QListWidget::item:hover {
+                        background: #e6f7ff;
+                    }
+                    QListWidget::item:selected {
+                        background: #2196F3;
+                        color: white;
+                        border-radius: 3px;
+                    }
+                    QListWidget::item:selected:!active {
+                        background: #1e88e5;
+                    }
+                """)
         self.results_list.itemDoubleClicked.connect(self.open_folder)
 
         # Сборка всех элементов интерфейса
@@ -298,6 +303,66 @@ class MainWindow(QMainWindow):
         layout.addLayout(filter_layout)
         layout.addWidget(results_label)
         layout.addWidget(self.results_list)
+
+    def show_context_menu(self, pos):
+        """Показываем контекстное меню для выбранного элемента"""
+        item = self.results_list.itemAt(pos)
+        if not item:
+            return
+
+        text = item.text().strip()
+        if text.startswith("❌ Ошибка:"):
+            return
+
+        # Создаем меню
+        menu = QMenu()
+
+        # Действие "Открыть"
+        open_action = menu.addAction("📂 Открыть")
+        open_action.triggered.connect(lambda: self.open_folder(item))
+
+        # Действие "Удалить"
+        delete_action = menu.addAction("🗑️ Удалить")
+        delete_action.triggered.connect(lambda: self.delete_folder(item))
+
+        # Показываем меню в позиции курсора
+        menu.exec_(self.results_list.viewport().mapToGlobal(pos))
+
+    def get_path_from_item(self, item):
+        """Извлекаем путь из элемента списка"""
+        text = item.text().strip()
+        path = text.split(" - ")[0].replace("├─", "").strip()
+        return os.path.normpath(path)
+
+    def delete_folder(self, item):
+        """Удаление выбранной папки"""
+        path = self.get_path_from_item(item)
+
+        if not os.path.exists(path):
+            QMessageBox.warning(self, "Ошибка", "Папка не существует!")
+            return
+
+        reply = QMessageBox.question(
+            self,
+            "Подтверждение удаления",
+            f"Вы уверены, что хотите удалить папку?\n{path}",
+            QMessageBox.Yes | QMessageBox.No
+        )
+
+        if reply == QMessageBox.Yes:
+            try:
+                # Удаляем папку с содержимым
+                shutil.rmtree(path)
+
+                # Удаляем элемент из списка
+                self.results_list.takeItem(self.results_list.row(item))
+
+                # Обновляем общий список папок
+                self.all_folders = [f for f in self.all_folders if f[0] != path]
+
+                QMessageBox.information(self, "Успех", "Папка успешно удалена!")
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить папку: {str(e)}")
 
     def select_folder(self):
         """Выбор папки для сканирования"""
@@ -335,7 +400,6 @@ class MainWindow(QMainWindow):
         self.scanner = FolderScanner(
             path,
             self.size_spin.value(),
-            self.skip_hidden_check.isChecked()
         )
 
         # Подключаем сигналы сканера к слотам
@@ -435,13 +499,13 @@ class MainWindow(QMainWindow):
 
     def open_folder(self, item):
         """Открытие папки в проводнике"""
+        if not item:  # если вызывается по двойному клику
+            item = self.results_list.currentItem()
         text = item.text().strip()
         if text.startswith("❌ Ошибка:"):
             return
 
-        path = item.text().split(" - ")[0].strip()
-        if '├─' in path:  # Фиксит открытие подпапок
-            path = path.split('├─')[1].strip()
+        path = self.get_path_from_item(item)
         if os.path.exists(path):
             try:
                 if sys.platform == 'win32':
